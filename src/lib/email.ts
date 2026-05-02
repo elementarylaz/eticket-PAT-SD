@@ -1,5 +1,3 @@
-import QRCode from 'qrcode';
-
 export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxuXtiE8AX0lZhJZWazF9ezv6xbJUGRztGIaw4LuuAblwQCCzms08hfVEAX0ZQITcjg/exec';
 
 interface EmailData {
@@ -21,13 +19,8 @@ export async function sendTicketEmail(data: EmailData) {
   const isPaid = data.status === 'paid';
   const isTerusan = data.studentName2 && data.studentClass2;
   
-  // Generate QR Code as Data URL
-  let qrCodeDataUrl = '';
-  try {
-    qrCodeDataUrl = await QRCode.toDataURL(data.orderId, { margin: 2, width: 200 });
-  } catch (err) {
-    console.error('QR Gen Error:', err);
-  }
+  // Generate QR Code URL using external API for better email client compatibility
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(data.orderId)}&size=200x200&margin=10`;
 
   const subject = isPaid 
     ? `E-Ticket: Elementary End-Year Performance 2026 (LUNAS) - ${data.orderId.toUpperCase()}` 
@@ -89,10 +82,10 @@ export async function sendTicketEmail(data: EmailData) {
           </table>
         </div>
 
-        ${isPaid && qrCodeDataUrl ? `
+        ${isPaid ? `
         <div style="text-align: center; margin: 24px 0; padding: 20px; background-color: white; border: 2px dashed #fed7aa; border-radius: 12px;">
           <p style="margin: 0 0 12px 0; font-size: 12px; color: #6b7280; font-weight: bold; text-transform: uppercase; tracking: 1px;">Scan QR Code saat Registrasi</p>
-          <img src="${qrCodeDataUrl}" alt="QR Code" style="width: 180px; height: 180px;" />
+          <img src="${qrCodeUrl}" alt="QR Code" width="180" height="180" style="display: block; margin: 0 auto; width: 180px; height: 180px;" />
           <p style="margin: 12px 0 0 0; font-family: monospace; font-size: 14px; color: #ea580c; font-weight: bold;">${data.orderId.toUpperCase()}</p>
         </div>
         ` : ''}
