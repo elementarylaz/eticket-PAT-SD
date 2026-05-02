@@ -26,6 +26,27 @@ export async function sendTicketEmail(data: EmailData) {
     ? `E-Ticket: Elementary End-Year Performance 2026 (LUNAS) - ${data.orderId.toUpperCase()}` 
     : `Konfirmasi Pesanan: Elementary End-Year Performance 2026 - ${data.orderId.toUpperCase()}`;
 
+  // Plain text version for better deliverability
+  const textBody = `
+Halo ${data.parentName},
+
+${isPaid ? 'Pembayaran Anda telah kami terima.' : 'Terima kasih telah melakukan pemesanan tiket.'}
+
+Rincian Pesanan:
+- Order ID: ${data.orderId.toUpperCase()}
+- Status: ${isPaid ? 'LUNAS' : 'MENUNGGU PEMBAYARAN'}
+- Nama Ananda: ${data.studentName} (${data.studentClass}) ${isTerusan ? `& ${data.studentName2} (${data.studentClass2})` : ''}
+- Kategori: ${data.ticketName}
+- Kursi: ${data.seats.join(', ')}
+- Sesi: ${data.sessions.join(', ')}
+- Total: Rp ${data.totalAmount.toLocaleString('id-ID')}
+
+${isPaid ? 'Silakan tunjukkan Order ID Anda saat registrasi.' : 'Silakan lakukan pembayaran ke BCA: 2673005551 a.n Yayasan Lazuardi Hayati.'}
+
+Lokasi: Makara Art Center, UI Depok
+Waktu: 14 Mei 2026, 07:30 WIB
+  `.trim();
+
   const htmlBody = `
     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #fed7aa; border-radius: 12px; overflow: hidden;">
       <div style="background-color: ${isPaid ? '#ea580c' : '#f97316'}; color: white; padding: 24px; text-align: center;">
@@ -134,7 +155,9 @@ export async function sendTicketEmail(data: EmailData) {
         action: 'email',
         email: data.email,
         subject: subject,
-        htmlBody: htmlBody
+        body: textBody,
+        htmlBody: htmlBody,
+        senderName: "Lazuardi Elementary Ticket"
       })
     });
     
