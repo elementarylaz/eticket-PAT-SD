@@ -302,7 +302,7 @@ const ETicket: React.FC<{ order: Order }> = ({ order }) => {
               <p className="text-[10px] text-amber-700 leading-relaxed mb-2">
                 Silakan transfer Rp {order.totalAmount.toLocaleString('id-ID')} ke BCA 2673005551 a.n Yayasan Lazuardi Hayati.
               </p>
-              {order.expiresAt && (
+              {order.expiresAt && !order.paymentProof && (
                 <div className="flex items-center gap-1.5 text-[9px] text-red-600 font-black px-2 py-1 bg-white/50 rounded-lg inline-block">
                   <Clock className="w-2.5 h-2.5" />
                   <span>BATAS BAYAR: {displayWIB(order.expiresAt)}</span>
