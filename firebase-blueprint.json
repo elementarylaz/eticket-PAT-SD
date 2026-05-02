@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "Seat": {
+      "title": "Seat",
+      "description": "Represents a seat in the auditorium",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Seat ID (e.g., A1, B12)" },
+        "status": { "type": "string", "enum": ["available", "locked", "sold"], "description": "Current status of the seat" },
+        "lockedBy": { "type": "string", "description": "UID of the user who locked the seat" },
+        "lockedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the seat was locked" },
+        "orderId": { "type": "string", "description": "ID of the order if sold" },
+        "session": { "type": "string", "enum": ["Sesi 1", "Sesi 2", "Sesi 3"], "description": "Which session this seat belongs to" }
+      },
+      "required": ["id", "status", "session"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Represents a ticket purchase order",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "parentName": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentClass": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "ticketType": { "type": "string" },
+        "sessions": { "type": "array", "items": { "type": "string" } },
+        "seats": { "type": "array", "items": { "type": "string" } },
+        "totalAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "paid", "cancelled"] },
+        "paymentProof": { "type": "string", "description": "URL to payment proof image" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email", "ticketType", "totalAmount", "status"]
+    },
+    "TicketConfig": {
+      "title": "Ticket Configuration",
+      "description": "Overrides for ticket sale timing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "availableFrom": { "type": "string", "format": "date-time" },
+        "availableUntil": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/seats/{seatId}": {
+      "schema": "Seat",
+      "description": "Real-time seat status"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Ticket orders"
+    },
+    "/ticketConfigs/{configId}": {
+      "schema": "TicketConfig",
+      "description": "Ticketing schedule Overrides"
+    }
+  }
+}

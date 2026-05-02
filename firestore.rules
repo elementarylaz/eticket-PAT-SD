@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email in [
+          "dini@lazuardi.sch.id",
+          "titi@lazuardi.sch.id",
+          "mira@lazuardi.sch.id",
+          "finance@lazuardi.sch.id",
+          "noviastuty@lazuardi.sch.id",
+          "jadid@lazuardi.sch.id",
+          "elyana@lazuardi.sch.id",
+          "saidi@lazuardi.sch.id",
+          "fina@lazuardi.sch.id",
+          "sari@lazuardi.sch.id",
+          "admin2@lazuardi.sch.id",
+          "gc.sd@lazuardi.sch.id"
+        ]);
+    }
+
+    // Seats: Anyone can read, only authenticated can lock, only admin can finalize
+    match /seats/{seatId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && (
+        (request.resource.data.status == 'locked' && request.resource.data.lockedBy == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        // Locking a seat
+        (request.resource.data.status == 'locked' && (resource.data.status == 'available' || !('status' in resource.data)) && request.resource.data.lockedBy == request.auth.uid) ||
+        // Unlocking own seat
+        (request.resource.data.status == 'available' && resource.data.lockedBy == request.auth.uid) ||
+        // Marking as sold during checkout
+        (request.resource.data.status == 'sold' && resource.data.lockedBy == request.auth.uid) ||
+        // Admin finalizing
+        isAdmin()
+      );
+    }
+
+    // Orders: User can read/create own, admin can read/update/delete all
+    match /orders/{orderId} {
+      allow read: if isAdmin() || (isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.email == request.auth.token.email));
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin() || (isOwner(resource.data.userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paymentProof', 'updatedAt']));
+      allow delete: if isAdmin();
+    }
+
+    // Users: Private profile
+    match /users/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // Ticket Configs: Anyone can read, only admin can write
+    match /ticketConfigs/{configId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
