@@ -230,7 +230,8 @@ export default function AdminView() {
       const expiredOrders = orders.filter(o => 
         o.status === 'pending' && 
         o.expiresAt && 
-        new Date(o.expiresAt) < now
+        new Date(o.expiresAt) < now &&
+        !o.paymentProof // Don't cancel if proof exists
       );
 
       if (expiredOrders.length > 0) {
