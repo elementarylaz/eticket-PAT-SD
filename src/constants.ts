@@ -216,14 +216,14 @@ export const STUDENTS_BY_CLASS: Record<string, string[]> = {
 };
 
 export const TICKET_TYPES: TicketType[] = [
-  {
+    {
     id: "reg-a",
     name: "Tiket Reguler PAT Fase A",
     price: 100000,
     description: "Akses 1 sesi sesuai fase. 1 tiket untuk 1 orang & 1 kursi.",
     sessions: ["Sesi 1"],
     availableFrom: "2026-04-28T06:30:00Z",
-    availableUntil: "2026-04-28T08:30:00Z",
+    availableUntil: "2026-05-30T23:59:00Z",
   },
   {
     id: "reg-b",
@@ -232,7 +232,7 @@ export const TICKET_TYPES: TicketType[] = [
     description: "Akses 1 sesi sesuai fase. 1 tiket untuk 1 orang & 1 kursi.",
     sessions: ["Sesi 2"],
     availableFrom: "2026-04-29T06:30:00Z",
-    availableUntil: "2026-04-29T08:30:00Z",
+    availableUntil: "2026-05-30T23:59:00Z",
   },
   {
     id: "reg-c",
@@ -241,7 +241,7 @@ export const TICKET_TYPES: TicketType[] = [
     description: "Akses 1 sesi sesuai fase. 1 tiket untuk 1 orang & 1 kursi.",
     sessions: ["Sesi 3"],
     availableFrom: "2026-05-04T06:30:00Z",
-    availableUntil: "2026-05-04T08:30:00Z",
+    availableUntil: "2026-05-30T23:59:00Z",
   },
   {
     id: "terusan-ab",
@@ -250,7 +250,7 @@ export const TICKET_TYPES: TicketType[] = [
     description: "Akses 2 sesi sesuai fase. 1 tiket untuk 1 orang & 1 kursi.",
     sessions: ["Sesi 1", "Sesi 2"],
     availableFrom: "2026-04-30T06:30:00Z",
-    availableUntil: "2026-04-30T08:30:00Z",
+    availableUntil: "2026-05-30T23:59:00Z",
   },
   {
     id: "terusan-ac",
@@ -259,7 +259,7 @@ export const TICKET_TYPES: TicketType[] = [
     description: "Akses 2 sesi sesuai fase. 1 tiket untuk 1 orang & 1 kursi.",
     sessions: ["Sesi 1", "Sesi 3"],
     availableFrom: "2026-04-30T06:30:00Z",
-    availableUntil: "2026-04-30T08:30:00Z",
+    availableUntil: "2026-05-30T23:59:00Z",
   },
   {
     id: "terusan-bc",
@@ -268,6 +268,6 @@ export const TICKET_TYPES: TicketType[] = [
     description: "Akses 2 sesi sesuai fase. 1 tiket untuk 1 orang & 1 kursi.",
     sessions: ["Sesi 2", "Sesi 3"],
     availableFrom: "2026-04-30T06:30:00Z",
-    availableUntil: "2026-04-30T08:30:00Z",
+    availableUntil: "2026-05-30T23:59:00Z",
   },
 ];
