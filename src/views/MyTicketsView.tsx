@@ -206,20 +206,26 @@ const ETicket: React.FC<{ order: Order }> = ({ order }) => {
     doc.text(`Order ID: ${order.id?.toUpperCase()}`, 20, 55);
     doc.text(`Nama Orang Tua: ${order.parentName}`, 20, 65);
     doc.text(`Nama Ananda 1: ${order.studentName} (${order.studentClass})`, 20, 75);
+    
+    let currentY = 85;
     if (order.studentName2) {
-      doc.text(`Nama Ananda 2: ${order.studentName2} (${order.studentClass2})`, 20, 85);
-      doc.text(`Status: ${order.status.toUpperCase()}`, 20, 95);
-    } else {
-      doc.text(`Status: ${order.status.toUpperCase()}`, 20, 85);
+      doc.text(`Nama Ananda 2: ${order.studentName2} (${order.studentClass2})`, 20, currentY);
+      currentY += 10;
     }
+    if (order.studentName3) {
+      doc.text(`Nama Ananda 3: ${order.studentName3} (${order.studentClass3})`, 20, currentY);
+      currentY += 10;
+    }
+    
+    doc.text(`Status: ${order.status.toUpperCase()}`, 20, currentY);
 
     autoTable(doc, {
-      startY: order.studentName2 ? 105 : 95,
+      startY: currentY + 10,
       head: [['Detail Tiket', 'Keterangan']],
       body: [
         ['Kategori', order.ticketType],
         ['Sesi', order.sessions.join(', ')],
-        ['Nomor Kursi', order.seats.map(s => s.split('-').pop()).join(', ')],
+        ['Nomor Kursi', order.seats.map(s => s.includes('-') ? `${s.split('-').pop()} (${s.split('-')[0]})` : s).join(', ')],
         ['Total Bayar', `Rp ${order.totalAmount.toLocaleString('id-ID')}`],
       ],
       theme: 'striped',
@@ -264,6 +270,9 @@ const ETicket: React.FC<{ order: Order }> = ({ order }) => {
               {order.studentName2 && (
                 <p className="text-xs font-bold text-lazuardi">Ananda 2: {order.studentName2} ({order.studentClass2})</p>
               )}
+              {order.studentName3 && (
+                <p className="text-xs font-bold text-lazuardi">Ananda 3: {order.studentName3} ({order.studentClass3})</p>
+              )}
             </div>
           </div>
           <div className="text-right">
@@ -280,7 +289,9 @@ const ETicket: React.FC<{ order: Order }> = ({ order }) => {
           </div>
           <div className="text-right space-y-1">
             <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Kursi</p>
-            <p className="font-medium">{order.seats.map(s => s.split('-').pop()).join(', ')}</p>
+            <p className="font-medium text-xs">
+              {order.seats.map(s => s.includes('-') ? `${s.split('-').pop()} (${s.split('-')[0]})` : s).join(', ')}
+            </p>
           </div>
         </div>
 
