@@ -7,6 +7,8 @@ interface EmailData {
   studentClass: string;
   studentName2?: string;
   studentClass2?: string;
+  studentName3?: string;
+  studentClass3?: string;
   orderId: string;
   ticketName: string;
   seats: string[];
@@ -35,7 +37,7 @@ ${isPaid ? 'Pembayaran Anda telah kami terima.' : 'Terima kasih telah melakukan 
 Rincian Pesanan:
 - Order ID: ${data.orderId.toUpperCase()}
 - Status: ${isPaid ? 'LUNAS' : 'MENUNGGU PEMBAYARAN'}
-- Nama Ananda: ${data.studentName} (${data.studentClass}) ${isTerusan ? `& ${data.studentName2} (${data.studentClass2})` : ''}
+- Nama Ananda: ${data.studentName} (${data.studentClass})${data.studentName2 ? `, ${data.studentName2} (${data.studentClass2})` : ''}${data.studentName3 ? `, ${data.studentName3} (${data.studentClass3})` : ''}
 - Kategori: ${data.ticketName}
 - Kursi: ${data.seats.join(', ')}
 - Sesi: ${data.sessions.join(', ')}
@@ -77,7 +79,8 @@ Waktu: 14 Mei 2026, 07:30 WIB
               <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Nama Ananda</td>
               <td style="padding: 8px 0; text-align: right; font-weight: bold;">
                 ${data.studentName} (${data.studentClass})
-                ${isTerusan ? `<br><span style="font-size: 11px; color: #6b7280;">dan</span><br>${data.studentName2} (${data.studentClass2})` : ''}
+                ${data.studentName2 ? `<br><span style="font-size: 11px; color: #6b7280;">dan</span><br>${data.studentName2} (${data.studentClass2})` : ''}
+                ${data.studentName3 ? `<br><span style="font-size: 11px; color: #6b7280;">dan</span><br>${data.studentName3} (${data.studentClass3})` : ''}
               </td>
             </tr>
             <tr>
