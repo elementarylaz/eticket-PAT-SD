@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { collection, onSnapshot, doc, updateDoc, query, orderBy, writeBatch, setDoc } from 'firebase/firestore';
 import { Order, Seat, TicketConfig } from '../types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
@@ -14,12 +14,48 @@ import { motion, AnimatePresence } from 'motion/react';
 import { formatToWIB, displayWIB, parseWIB } from '../lib/timezone';
 
 enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
   LIST = 'list',
   GET = 'get',
+  WRITE = 'write',
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string) {
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   console.error(`Firestore ${operationType} error on ${path}:`, error);
+  
+  const errInfo: any = {
+    error: error instanceof Error ? error.message : String(error),
+    operationType,
+    path,
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+    }
+  };
+  
+  // Log full error for developer
+  console.log("Full Firestore Error Info:", JSON.stringify(errInfo, null, 2));
+  
+  throw new Error(JSON.stringify(errInfo));
 }
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -89,7 +125,13 @@ export default function AdminView() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [viewProofUrl, setViewProofUrl] = useState<string | null>(null);
 
-  // Modal States
+  useEffect(() => {
+    if (auth.currentUser) {
+      console.log("Admin email logged in:", auth.currentUser.email);
+    }
+    
+    // ... existing onSnapshot listeners ...
+  }, []);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -466,18 +508,26 @@ export default function AdminView() {
   const handleResetSeats = async () => {
     const toastId = toast.loading("Me-reset kursi...");
     try {
-      const batch = writeBatch(db);
-      seats.forEach(seat => {
-        batch.set(doc(db, 'seats', seat.id), {
-          status: 'available',
-          orderId: null,
-          lockedBy: null,
-          lockedAt: null
-        }, { merge: true });
-      });
-      await batch.commit();
+      const chunks = [];
+      for (let i = 0; i < seats.length; i += 450) {
+        chunks.push(seats.slice(i, i + 450));
+      }
+
+      for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach(seat => {
+          batch.set(doc(db, 'seats', seat.id), {
+            status: 'available',
+            orderId: null,
+            lockedBy: null,
+            lockedAt: null
+          }, { merge: true });
+        });
+        await batch.commit();
+      }
       toast.success("Semua kursi telah di-reset", { id: toastId });
     } catch (error) {
+      console.error("Reset seats error:", error);
       toast.error("Gagal me-reset kursi", { id: toastId });
     }
   };
@@ -485,13 +535,21 @@ export default function AdminView() {
   const handleResetOrders = async () => {
     const toastId = toast.loading("Menghapus pesanan...");
     try {
-      const batch = writeBatch(db);
-      orders.forEach(order => {
-        batch.delete(doc(db, 'orders', order.id!));
-      });
-      await batch.commit();
+      const chunks = [];
+      for (let i = 0; i < orders.length; i += 450) {
+        chunks.push(orders.slice(i, i + 450));
+      }
+
+      for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach(order => {
+          batch.delete(doc(db, 'orders', order.id!));
+        });
+        await batch.commit();
+      }
       toast.success("Semua pesanan telah dihapus", { id: toastId });
     } catch (error) {
+      console.error("Reset orders error:", error);
       toast.error("Gagal menghapus pesanan", { id: toastId });
     }
   };
@@ -789,27 +847,88 @@ export default function AdminView() {
             onClick={() => {
               openConfirm(
                 "Sinkronisasi Kursi",
-                "Apakah Anda yakin ingin menyinkronkan status kursi berdasarkan data pesanan? Ini akan menandai semua kursi dari pesanan Lunas/Pending sebagai 'terisi'.",
+                "Apakah Anda yakin ingin menyinkronkan status kursi berdasarkan data pesanan? Ini akan memastikan kursi terisi sesuai dengan sesi yang dipesan dan membersihkan data kursi lama yang tidak valid.",
                 async () => {
                   const toastId = toast.loading("Sinkronisasi...");
                   try {
-                    const batch = writeBatch(db);
-                    const activeOrders = orders.filter(o => o.status === 'paid' || o.status === 'pending');
+                    // 1. Prepare all operations in a Map for deduplication
+                    const opsMap = new Map<string, { type: 'set' | 'delete', ref: any, data?: any }>();
                     
-                    // Reset all seats to available first? No, better just overwrite
+                    seats.forEach(s => {
+                      const sRef = doc(db, 'seats', s.id);
+                      if (!s.id.includes('-')) {
+                        // Global seat template - remove from DB
+                        opsMap.set(s.id, { type: 'delete', ref: sRef });
+                      } else {
+                        const label = s.id.includes('-') ? s.id.split('-').pop() : s.id;
+                        opsMap.set(s.id, { 
+                          type: 'set', 
+                          ref: sRef, 
+                          data: {
+                            id: s.id,
+                            session: s.id.includes('-') ? s.id.split('-')[0] : 'S1',
+                            row: label?.charAt(0),
+                            number: parseInt(label?.slice(1) || '0'),
+                            status: 'available',
+                            orderId: null,
+                            lockedBy: null,
+                            lockedAt: null
+                          }
+                        });
+                      }
+                    });
+
+                    const activeOrders = orders.filter(o => o.status === 'paid' || o.status === 'pending');
                     for (const order of activeOrders) {
-                      for (const seatId of order.seats) {
-                        const sRef = doc(db, 'seats', seatId);
-                        batch.set(sRef, {
-                          status: 'sold',
-                          orderId: order.id,
-                        }, { merge: true });
+                      for (const rawSeat of order.seats) {
+                        const label = rawSeat.includes('-') ? rawSeat.split('-').pop() : rawSeat;
+                        for (const sId of order.sessions) {
+                          const seatId = `${sId}-${label}`;
+                          const sRef = doc(db, 'seats', seatId);
+                          opsMap.set(seatId, {
+                            type: 'set',
+                            ref: sRef,
+                            data: {
+                              status: 'sold',
+                              orderId: order.id,
+                              id: seatId,
+                              session: sId,
+                              row: label?.charAt(0),
+                              number: parseInt(label?.slice(1) || '0')
+                            }
+                          });
+                        }
                       }
                     }
-                    await batch.commit();
-                    toast.success("Sinkronisasi selesai", { id: toastId });
+
+                    const ops = Array.from(opsMap.values());
+
+                    // 2. Execute in chunks of 450 (safe limit)
+                    const chunks = [];
+                    for (let i = 0; i < ops.length; i += 450) {
+                      chunks.push(ops.slice(i, i + 450));
+                    }
+
+                    for (const chunk of chunks) {
+                      const batch = writeBatch(db);
+                      chunk.forEach(op => {
+                        if (op.type === 'delete') {
+                          batch.delete(op.ref);
+                        } else {
+                          batch.set(op.ref, op.data, { merge: true });
+                        }
+                      });
+                      try {
+                        await batch.commit();
+                      } catch (err) {
+                        handleFirestoreError(err, OperationType.WRITE, 'seats batch');
+                      }
+                    }
+                    
+                    toast.success("Sinkronisasi selesai. Data kursi telah diperbarui sesuai tiap fase.", { id: toastId });
                   } catch (error) {
-                    toast.error("Gagal sinkronisasi", { id: toastId });
+                    console.error("Sync Error:", error);
+                    toast.error(`Gagal sinkronisasi: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: toastId });
                   }
                 },
                 "warning",
