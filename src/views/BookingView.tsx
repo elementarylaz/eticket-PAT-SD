@@ -122,7 +122,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
 
     // NEW: Check if this label is taken in ANY of the sessions included in this ticket
     const isTakenInAnySession = ticket.sessions.some(sId => {
-      const s = seats.find(seat => seat.id === `${sId}-${seatLabel}` || seat.id === seatLabel);
+      const s = seats.find(seat => seat.id === `${sId}-${seatLabel}`);
       // Only count as taken if it's explicitly sold OR locked by someone else
       return s && (s.status === 'sold' || (s.status === 'locked' && s.lockedBy !== user?.uid));
     });
@@ -504,6 +504,10 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 <span className="text-xs font-bold text-stone-600">Terisi</span>
               </div>
               <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-md border-2 border-dashed border-stone-300 bg-white"></div>
+                <span className="text-xs font-bold text-stone-600">Terisi di Sesi Lain</span>
+              </div>
+              <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-md bg-amber-400 border border-amber-600"></div>
                 <span className="text-xs font-bold text-stone-600">VIP (Reserved)</span>
               </div>
@@ -537,18 +541,18 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                     const seat = rowSeats.find(s => s.number === i);
                     const seatLabel = `${rowLabel}${i}`;
 
-                    // Check availability across all sessions for this specific ticket
-                    const isTakenInAny = ticket.sessions.some(sId => {
-                      const s = seats.find(st => st.id === `${sId}-${seatLabel}` || st.id === seatLabel);
+                    // Physical status in the ACTIVE session
+                    const seatInActiveSession = seats.find(st => st.id === `${activeSession}-${seatLabel}`);
+                    const isSelected = selectedSeatsForActiveSession.includes(seatLabel);
+                    const isSold = seatInActiveSession?.status === 'sold';
+                    const isLocked = seatInActiveSession?.status === 'locked' && seatInActiveSession?.lockedBy !== user?.uid;
+                    
+                    // Cross-session check for visual hint (optional, but good for UX)
+                    const isTakenInOtherSession = ticket.sessions.some(sId => {
+                      if (sId === activeSession) return false;
+                      const s = seats.find(st => st.id === `${sId}-${seatLabel}`);
                       return s && (s.status === 'sold' || (s.status === 'locked' && s.lockedBy !== user?.uid));
                     });
-
-                    const isSelected = selectedSeatsForActiveSession.includes(seatLabel);
-                    const isSold = isTakenInAny && ticket.sessions.some(sId => {
-                      const s = seats.find(st => st.id === `${sId}-${seatLabel}` || st.id === seatLabel);
-                      return s?.status === 'sold';
-                    });
-                    const isLocked = isTakenInAny && !isSold && !isSelected;
                     // Use rowInfo.isVIP as the source of truth for the entire row
                     // Exception: Row F numbers 1-7 and 21-27 are unblocked
                     const isVIP = rowInfo.isVIP && !(rowLabel === 'F' && ((i >= 1 && i <= 7) || (i >= 21 && i <= 27)));
@@ -565,6 +569,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                           ${isSelected ? 'bg-lazuardi text-white shadow-xl shadow-lazuardi/30 scale-110 z-10 cursor-pointer ring-2 ring-white' : 
                             isSold || isLocked ? 'bg-stone-200 text-stone-400 cursor-not-allowed grayscale' : 
                             effectiveIsVIP ? 'bg-amber-400 border-2 border-amber-600 text-white cursor-not-allowed shadow-md scale-95 opacity-90' :
+                            isTakenInOtherSession ? 'bg-white border-2 border-dashed border-stone-300 text-stone-400 hover:border-lazuardi hover:text-lazuardi cursor-pointer' :
                             'bg-white border-2 border-stone-200 text-stone-600 hover:border-lazuardi hover:text-lazuardi hover:scale-105 cursor-pointer shadow-sm'}
                         `}
                       >
