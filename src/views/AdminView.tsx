@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { toast } from 'sonner';
-import { Check, X, RefreshCw, Ticket, Armchair, CreditCard, Search, Trash2, AlertTriangle, Send, QrCode, UserCheck, Download, Clock, FileSpreadsheet, ExternalLink, Eye, Image as ImageIcon, Settings, Save, Calendar as CalendarIcon, Info } from 'lucide-react';
+import { Check, X, RefreshCw, Ticket, Armchair, CreditCard, Search, Trash2, AlertTriangle, Send, QrCode, UserCheck, Download, Clock, FileSpreadsheet, ExternalLink, Eye, Image as ImageIcon, Settings, Save, Calendar as CalendarIcon, Info, Lock, CheckCircle } from 'lucide-react';
 import { STUDENT_CLASSES, STUDENTS_BY_CLASS, SESSIONS, ADMIN_EMAILS, SEATING_LAYOUT, TICKET_TYPES } from '../constants';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatToWIB, displayWIB, parseWIB } from '../lib/timezone';
@@ -234,33 +234,75 @@ export default function AdminView() {
         !o.paymentProof // Don't cancel if proof exists
       );
 
-      if (expiredOrders.length > 0) {
-        console.log(`Cleaning up ${expiredOrders.length} expired orders...`);
+      // Clean up orphaned locks (locked but no orderId, and > 15 mins old)
+      const fifteenMinsAgo = new Date(now.getTime() - 15 * 60 * 1000);
+      const orphanedLockedSeats = seats.filter(s => 
+        s.status === 'locked' && 
+        !s.orderId && 
+        s.lockedAt && 
+        (s.lockedAt?.toDate ? s.lockedAt.toDate() : new Date(s.lockedAt)) < fifteenMinsAgo
+      );
+
+      // Clean up seats that are marked taken but belong to cancelled orders
+      const stuckOccupiedSeats = seats.filter(s => 
+        s.status !== 'available' && 
+        s.orderId && 
+        orders.find(o => o.id === s.orderId)?.status === 'cancelled'
+      );
+
+      if (expiredOrders.length > 0 || orphanedLockedSeats.length > 0 || stuckOccupiedSeats.length > 0) {
         const batch = writeBatch(db);
         
+        // Process expired orders
         for (const order of expiredOrders) {
-          // 1. Mark order as cancelled
           batch.update(doc(db, 'orders', order.id!), { status: 'cancelled' });
-          
-          // 2. Release seats
-          order.seats.forEach(seatLabel => {
-            order.sessions.forEach(sessionId => {
-              const seatId = `${sessionId}-${seatLabel}`;
+          order.seats.forEach(seatId => {
+            // Handle both full IDs (Sesi 1-D10) and old IDs (D10)
+            if (seatId.includes('-')) {
               batch.set(doc(db, 'seats', seatId), {
                 status: 'available',
                 lockedBy: null,
                 lockedAt: null,
                 orderId: null
               }, { merge: true });
-            });
+            } else {
+              // Old format: reset in all possible sessions
+              SESSIONS.forEach(session => {
+                const fullId = `${session.id}-${seatId}`;
+                batch.set(doc(db, 'seats', fullId), {
+                  status: 'available',
+                  lockedBy: null,
+                  lockedAt: null,
+                  orderId: null
+                }, { merge: true });
+              });
+            }
           });
         }
-        
+
+        // Process stuck seats from cancelled orders
+        stuckOccupiedSeats.forEach(seat => {
+          batch.set(doc(db, 'seats', seat.id), {
+            status: 'available',
+            lockedBy: null,
+            lockedAt: null,
+            orderId: null
+          }, { merge: true });
+        });
+
+        // Process orphaned locks
+        orphanedLockedSeats.forEach(seat => {
+          batch.update(doc(db, 'seats', seat.id), {
+            status: 'available',
+            lockedBy: null,
+            lockedAt: null
+          });
+        });
+
         try {
           await batch.commit();
-          toast.info(`${expiredOrders.length} pesanan kadaluarsa telah dibatalkan otomatis.`);
         } catch (error) {
-          console.error("Cleanup Error:", error);
+          console.error("Cleanup error:", error);
         }
       }
     }, 60000); // Check every minute
@@ -395,6 +437,8 @@ export default function AdminView() {
               studentClass: order.studentClass,
               studentName2: order.studentName2,
               studentClass2: order.studentClass2,
+              studentName3: order.studentName3,
+              studentClass3: order.studentClass3,
               orderId: order.id || '',
               ticketName: order.ticketType,
               seats: order.seats,
@@ -462,16 +506,25 @@ export default function AdminView() {
           const batch = writeBatch(db);
           
           // 1. Reset seats in all sessions associated with the order
-          order.seats.forEach(seatLabel => {
-            order.sessions.forEach(sessionId => {
-              const seatId = `${sessionId}-${seatLabel}`;
+          order.seats.forEach(seatId => {
+            if (seatId.includes('-')) {
               batch.set(doc(db, 'seats', seatId), {
                 status: 'available',
                 lockedBy: null,
                 lockedAt: null,
                 orderId: null
               }, { merge: true });
-            });
+            } else {
+              SESSIONS.forEach(session => {
+                const fullId = `${session.id}-${seatId}`;
+                batch.set(doc(db, 'seats', fullId), {
+                  status: 'available',
+                  lockedBy: null,
+                  lockedAt: null,
+                  orderId: null
+                }, { merge: true });
+              });
+            }
           });
 
           // 2. Delete order
@@ -499,13 +552,22 @@ export default function AdminView() {
           batch.update(doc(db, 'orders', order.id!), { status: 'cancelled' });
           
           order.seats.forEach(seatId => {
-            const seatExists = seats.some(s => s.id === seatId);
-            if (seatExists) {
-              batch.update(doc(db, 'seats', seatId), {
+            if (seatId.includes('-')) {
+              batch.set(doc(db, 'seats', seatId), {
                 status: 'available',
                 lockedBy: null,
                 lockedAt: null,
                 orderId: null
+              }, { merge: true });
+            } else {
+              SESSIONS.forEach(session => {
+                const fullId = `${session.id}-${seatId}`;
+                batch.set(doc(db, 'seats', fullId), {
+                  status: 'available',
+                  lockedBy: null,
+                  lockedAt: null,
+                  orderId: null
+                }, { merge: true });
               });
             }
           });
@@ -581,11 +643,14 @@ export default function AdminView() {
   const initializeSeats = async () => {
     openConfirm(
       "Inisialisasi Kursi",
-      "Apakah Anda yakin ingin menginisialisasi ulang semua kursi? Data kursi saat ini akan dihapus dan dibuat ulang sesuai layout.",
+      "Apakah Anda yakin ingin menginisialisasi kursi? Ini akan membuat data kursi yang belum ada di database untuk setiap sesi.",
       async () => {
+        const toastId = toast.loading("Menginisialisasi kursi...");
         try {
           for (const session of SESSIONS) {
             const batch = writeBatch(db);
+            let addedCount = 0;
+
             SEATING_LAYOUT.forEach(rowInfo => {
               const sections = [
                 { range: rowInfo.right, type: 'right' },
@@ -597,24 +662,35 @@ export default function AdminView() {
                 const [start, end] = section.range;
                 for (let i = start; i <= end; i++) {
                   const seatId = `${session.id}-${rowInfo.row}${i}`;
-                  const seatRef = doc(db, 'seats', seatId);
-                  batch.set(seatRef, {
-                    id: seatId,
-                    row: rowInfo.row,
-                    number: i,
-                    status: 'available',
-                    isVIP: rowInfo.isVIP || false,
-                    session: session.id
-                  });
+                  
+                  // Only create if it doesn't exist in the current 'seats' state
+                  const exists = seats.some(s => s.id === seatId);
+                  
+                  if (!exists) {
+                    const seatRef = doc(db, 'seats', seatId);
+                    batch.set(seatRef, {
+                      id: seatId,
+                      row: rowInfo.row,
+                      number: i,
+                      status: 'available',
+                      isVIP: rowInfo.isVIP || false,
+                      session: session.id
+                    });
+                    addedCount++;
+                  }
                 }
               });
             });
-            await batch.commit();
+
+            if (addedCount > 0) {
+              await batch.commit();
+              console.log(`Added ${addedCount} seats for ${session.id}`);
+            }
           }
-          toast.success("Kursi berhasil diinisialisasi untuk semua sesi");
+          toast.success("Inisialisasi kursi selesai. Kursi yang sudah ada tidak dirubah.", { id: toastId });
         } catch (error) {
           console.error(error);
-          toast.error("Gagal inisialisasi kursi");
+          toast.error("Gagal inisialisasi kursi", { id: toastId });
         }
       },
       "warning",
@@ -627,6 +703,8 @@ export default function AdminView() {
     paidOrders: orders.filter(o => o.status === 'paid').length,
     totalRevenue: orders.filter(o => o.status === 'paid').reduce((acc, o) => acc + o.totalAmount, 0),
     occupiedSeats: seats.filter(s => s.status === 'sold').length,
+    lockedSeats: seats.filter(s => s.status === 'locked').length,
+    availableSeats: seats.filter(s => s.status === 'available').length,
     checkedIn: orders.filter(o => o.checkedIn).length,
     remainingCheckIn: orders.filter(o => o.status === 'paid' && !o.checkedIn).length
   };
@@ -705,6 +783,43 @@ export default function AdminView() {
             <RefreshCw className="w-4 h-4 mr-2" />
             Reset Kursi
           </Button>
+          <Button 
+            variant="ghost" 
+            className="rounded-full font-bold px-4 text-stone-400 hover:text-lazuardi hover:bg-lazuardi/5 transition-colors"
+            onClick={() => {
+              openConfirm(
+                "Sinkronisasi Kursi",
+                "Apakah Anda yakin ingin menyinkronkan status kursi berdasarkan data pesanan? Ini akan menandai semua kursi dari pesanan Lunas/Pending sebagai 'terisi'.",
+                async () => {
+                  const toastId = toast.loading("Sinkronisasi...");
+                  try {
+                    const batch = writeBatch(db);
+                    const activeOrders = orders.filter(o => o.status === 'paid' || o.status === 'pending');
+                    
+                    // Reset all seats to available first? No, better just overwrite
+                    for (const order of activeOrders) {
+                      for (const seatId of order.seats) {
+                        const sRef = doc(db, 'seats', seatId);
+                        batch.set(sRef, {
+                          status: 'sold',
+                          orderId: order.id,
+                        }, { merge: true });
+                      }
+                    }
+                    await batch.commit();
+                    toast.success("Sinkronisasi selesai", { id: toastId });
+                  } catch (error) {
+                    toast.error("Gagal sinkronisasi", { id: toastId });
+                  }
+                },
+                "warning",
+                "Ya, Sinkronkan"
+              );
+            }}
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Sync Kursi
+          </Button>
         </div>
       </div>
 
@@ -716,6 +831,8 @@ export default function AdminView() {
             <StatCard title="Pesanan Lunas" value={stats.paidOrders} icon={<Check className="w-5 h-5" />} />
             <StatCard title="Total Pendapatan" value={`Rp ${stats.totalRevenue.toLocaleString('id-ID')}`} icon={<CreditCard className="w-5 h-5" />} />
             <StatCard title="Kursi Terisi" value={`${stats.occupiedSeats} / ${seats.length}`} icon={<Armchair className="w-5 h-5" />} />
+            <StatCard title="Kursi Terkunci" value={`${stats.lockedSeats}`} icon={<Lock className="w-5 h-5" />} />
+            <StatCard title="Kursi Tersedia" value={`${stats.availableSeats}`} icon={<CheckCircle className="w-5 h-5" />} />
           </div>
 
           <Card className="border-stone-200 shadow-2xl rounded-[2.5rem] overflow-hidden bg-white mt-10">
@@ -780,6 +897,9 @@ export default function AdminView() {
                             {order.studentName2 && (
                                 <span className="text-[10px] text-lazuardi font-bold">Ananda 2: {order.studentName2} ({order.studentClass2})</span>
                             )}
+                            {order.studentName3 && (
+                                <span className="text-[10px] text-lazuardi font-bold">Ananda 3: {order.studentName3} ({order.studentClass3})</span>
+                            )}
                             <span className="text-[10px] text-stone-500 font-medium">{order.email}</span>
                           </div>
                         </TableCell>
@@ -795,9 +915,15 @@ export default function AdminView() {
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1 max-w-[150px]">
-                            {order.seats.map((s, idx) => (
-                              <Badge key={`${order.id}-${s}-${idx}`} variant="outline" className="text-[10px] py-0 h-5 border-stone-200 font-bold bg-white">{s}</Badge>
-                            ))}
+                            {order.seats.map((s, idx) => {
+                              const label = s.includes('-') ? s.split('-').pop() : s;
+                              const sId = s.includes('-') ? s.split('-')[0] : '';
+                              return (
+                                <Badge key={`${order.id}-${s}-${idx}`} variant="outline" className="text-[9px] py-0 h-5 border-stone-200 font-bold bg-white" title={sId}>
+                                  {label} {sId && `(${sId})`}
+                                </Badge>
+                              );
+                            })}
                           </div>
                         </TableCell>
                         <TableCell className="font-black text-lazuardi">
@@ -1030,6 +1156,8 @@ export default function AdminView() {
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">Nama Ananda</p>
                               <p className="font-bold text-stone-800">{order.studentName} ({order.studentClass})</p>
+                              {order.studentName2 && <p className="font-bold text-stone-800">{order.studentName2} ({order.studentClass2})</p>}
+                              {order.studentName3 && <p className="font-bold text-stone-800">{order.studentName3} ({order.studentClass3})</p>}
                             </div>
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">Kategori Tiket</p>
@@ -1037,7 +1165,9 @@ export default function AdminView() {
                             </div>
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">Nomor Kursi</p>
-                              <p className="font-bold text-stone-800">{order.seats.join(', ')}</p>
+                              <p className="font-bold text-stone-800">
+                                {order.seats.map(s => s.includes('-') ? `${s.split('-').pop()} (${s.split('-')[0]})` : s).join(', ')}
+                              </p>
                             </div>
                           </div>
 
@@ -1458,7 +1588,7 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
         email: 'scholarship@lazuardi.sch.id',
         ticketType: 'Alokasi Beasiswa',
         sessions: [selectedSession],
-        seats: selectedSeats,
+        seats: selectedSeats.map(label => `${selectedSession}-${label}`),
         totalAmount: 0,
         status: 'paid',
         createdAt: new Date().toISOString(),
