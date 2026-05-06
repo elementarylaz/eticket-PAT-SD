@@ -26,6 +26,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
   const isAdmin = user && ADMIN_EMAILS.includes(user.email || '');
   const maxSeats = ticket?.name.includes('Fase C') ? 3 : 2;
   const isTerusan = ticket?.name.toLowerCase().includes('terusan');
+  const isNormalFase = ticket && (ticket.name.includes('Fase A') || ticket.name.includes('Fase B') || ticket.name.includes('Fase C')) && !isTerusan;
   const now = new Date();
   const startTime = ticket ? new Date(ticket.availableFrom) : new Date(0);
   const endTime = ticket?.availableUntil ? new Date(ticket.availableUntil) : null;
@@ -271,14 +272,16 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
       return;
     }
 
-    if (selectedSlots.length >= 2 && (!formData.studentName2 || !formData.studentClass2)) {
-      toast.error("Mohon lengkapi data Ananda ke-2");
-      return;
-    }
+    if (!isNormalFase) {
+      if (selectedSlots.length >= 2 && (!formData.studentName2 || !formData.studentClass2)) {
+        toast.error("Mohon lengkapi data Ananda ke-2");
+        return;
+      }
 
-    if (selectedSlots.length >= 3 && (!formData.studentName3 || !formData.studentClass3)) {
-      toast.error("Mohon lengkapi data Ananda ke-3");
-      return;
+      if (selectedSlots.length >= 3 && (!formData.studentName3 || !formData.studentClass3)) {
+        toast.error("Mohon lengkapi data Ananda ke-3");
+        return;
+      }
     }
 
     if (isTerusan && (!formData.studentName2 || !formData.studentClass2)) {
@@ -738,7 +741,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="studentClass">{ticket.isPublic ? 'Keterangan Pembeli' : (ticket?.name.toLowerCase().includes('terusan') ? 'Kelas Ananda 1' : 'Kelas Ananda')} <span className="text-red-500">*</span></Label>
+                <Label htmlFor="studentClass">{ticket.isPublic ? 'Keterangan Pembeli' : (( (selectedSlots.length >= 2 && !isNormalFase) || isTerusan ) ? 'Kelas Ananda 1' : 'Kelas Ananda')} <span className="text-red-500">*</span></Label>
                 {ticket.isPublic ? (
                   <Input 
                     id="studentClass"
@@ -764,7 +767,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 )}
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="studentName">{ticket.isPublic ? 'Keterangan Siswa' : (selectedSlots.length >= 2 || isTerusan ? 'Nama Ananda 1' : 'Nama Lengkap Ananda')} <span className="text-red-500">*</span></Label>
+                <Label htmlFor="studentName">{ticket.isPublic ? 'Keterangan Siswa' : (( (selectedSlots.length >= 2 && !isNormalFase) || isTerusan ) ? 'Nama Ananda 1' : 'Nama Lengkap Ananda')} <span className="text-red-500">*</span></Label>
                 {ticket.isPublic ? (
                   <Input 
                     id="studentName"
@@ -808,7 +811,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 )}
               </div>
 
-              {(selectedSlots.length >= 2 || isTerusan) && (
+              {((selectedSlots.length >= 2 && !isNormalFase) || isTerusan) && (
                 <>
                   <div className="grid gap-2 pt-2 border-t border-stone-100">
                     <Label htmlFor="studentClass2">Kelas Ananda 2 <span className="text-red-500">*</span></Label>
@@ -883,7 +886,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 </>
               )}
 
-              {selectedSlots.length >= 3 && (
+              {(selectedSlots.length >= 3 && !isNormalFase) && (
                 <>
                   <div className="grid gap-2 pt-2 border-t border-stone-100">
                     <Label htmlFor="studentClass3">Kelas Ananda 3 <span className="text-red-500">*</span></Label>
@@ -986,13 +989,13 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                     Saya menyatakan bahwa data nama dan kelas ananda:
                     <div className="my-1 font-black text-lazuardi">
                       • {formData.studentName} ({formData.studentClass})
-                      {formData.studentName2 && (
+                      {formData.studentName2 && ((selectedSlots.length >= 2 && !isNormalFase) || isTerusan) && (
                         <>
                           <br />
                           • {formData.studentName2} ({formData.studentClass2})
                         </>
                       )}
-                      {formData.studentName3 && (
+                      {formData.studentName3 && (selectedSlots.length >= 3 && !isNormalFase) && (
                         <>
                           <br />
                           • {formData.studentName3} ({formData.studentClass3})
@@ -1035,3 +1038,4 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
     </div>
   );
 }
+
