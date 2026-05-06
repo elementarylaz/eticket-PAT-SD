@@ -18,6 +18,8 @@ export interface Order {
   studentClass: string;
   studentName2?: string;
   studentClass2?: string;
+  studentName3?: string;
+  studentClass3?: string;
   email: string;
   ticketType: string;
   sessions: string[];
