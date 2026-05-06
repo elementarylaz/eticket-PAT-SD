@@ -24,6 +24,8 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
   const navigate = useNavigate();
   const ticket = tickets.find(t => t.id === ticketId);
   const isAdmin = user && ADMIN_EMAILS.includes(user.email || '');
+  const maxSeats = ticket?.name.includes('Fase C') ? 3 : 2;
+  const isTerusan = ticket?.name.toLowerCase().includes('terusan');
   const now = new Date();
   const startTime = ticket ? new Date(ticket.availableFrom) : new Date(0);
   const endTime = ticket?.availableUntil ? new Date(ticket.availableUntil) : null;
@@ -33,7 +35,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
   const isAvailable = ticket && ((isStarted && !isEnded) || isAdmin);
   
   const [seats, setSeats] = useState<Seat[]>([]);
-  const [selectedSeats, setSelectedSeats] = useState<string[]>([]); // Stores seat labels like "A1", "B10"
+  const [selectedSlots, setSelectedSlots] = useState<Record<string, string | null>[]>([]); // Array of { sessionId: label | null }
   const [activeSession, setActiveSession] = useState(ticket?.sessions[0] || SESSIONS[0].id);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -46,8 +48,17 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
     studentClass: '',
     studentName2: '',
     studentClass2: '',
+    studentName3: '',
+    studentClass3: '',
     email: '',
   });
+
+  // Derived state for easier use in old code
+  const selectedSeatsForActiveSession = selectedSlots
+    .map(slot => slot[activeSession])
+    .filter((label): label is string => label !== null);
+
+  const totalSeatsSelected = selectedSlots.length; // Number of "Anandas"
 
   useEffect(() => {
     if (user) {
@@ -77,8 +88,6 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
 
   useEffect(() => {
     if (isCheckoutOpen) {
-      // Only admins can see all orders to filter students. 
-      // Parents can only see their own orders (enforced by rules and this query).
       const q = isAdmin 
         ? query(collection(db, 'orders'), where('status', 'in', ['pending', 'paid']))
         : query(collection(db, 'orders'), where('email', '==', user?.email), where('status', 'in', ['pending', 'paid']));
@@ -100,8 +109,6 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
     const seatNumber = parseInt(seatLabel.substring(1));
     const rowInfo = SEATING_LAYOUT.find(r => r.row === rowLabel);
     
-    // Strictly block VIP rows from being clicked
-    // Exception: Row F numbers 1-7 and 21-27 are now available as per request
     const isBlockedVIP = rowInfo?.isVIP && !(rowLabel === 'F' && ((seatNumber >= 1 && seatNumber <= 7) || (seatNumber >= 21 && seatNumber <= 27)));
 
     if (isBlockedVIP && !isAdmin) {
@@ -109,86 +116,168 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
       return;
     }
 
-    // Check if this seat label is available in ALL sessions of this ticket
-    const relevantSeats = ticket.sessions.map(sessionId => {
-      const seatId = `${sessionId}-${seatLabel}`;
-      return seats.find(s => s.id === seatId);
+    // Check if the clicked seat is available in the ACTIVE session
+    const seatIdInActiveSession = `${activeSession}-${seatLabel}`;
+    const seatInActiveSession = seats.find(s => s.id === seatIdInActiveSession);
+
+    // NEW: Check if this label is taken in ANY of the sessions included in this ticket
+    const isTakenInAnySession = ticket.sessions.some(sId => {
+      const s = seats.find(seat => seat.id === `${sId}-${seatLabel}` || seat.id === seatLabel);
+      // Only count as taken if it's explicitly sold OR locked by someone else
+      return s && (s.status === 'sold' || (s.status === 'locked' && s.lockedBy !== user?.uid));
     });
 
-    const isAnySold = relevantSeats.some(s => s?.status === 'sold');
-    const isAnyVIP = relevantSeats.some(s => s?.isVIP);
-    
-    if (isAnySold) {
-      toast.error("Kursi ini sudah terjual di salah satu sesi");
+    if (isTakenInAnySession) {
+      toast.error("Kursi ini sudah terisi atau sedang dipilih orang lain di salah satu sesi tiket ini.");
       return;
     }
 
-    if (isAnyVIP && !isAdmin) {
-      toast.error("Kursi VIP tidak dapat dipilih");
+    const isLockedByOther = seatInActiveSession?.status === 'locked' && seatInActiveSession.lockedBy !== user?.uid;
+
+    if (isLockedByOther) {
+      toast.error("Kursi sedang dipilih orang lain");
       return;
     }
 
-    if (selectedSeats.includes(seatLabel)) {
-      // Unlock seat in all sessions
+    // Check if label is already selected in active session
+    const slotIndex = selectedSlots.findIndex(slot => slot[activeSession] === seatLabel);
+
+    if (slotIndex !== -1) {
+      // DESELECT logic: Remove the whole slot (all sessions for this person)
       try {
         const batch = writeBatch(db);
-        ticket.sessions.forEach(sessionId => {
-          const seatId = `${sessionId}-${seatLabel}`;
-          batch.set(doc(db, 'seats', seatId), {
-            status: 'available',
-            lockedBy: null,
-            lockedAt: null
-          }, { merge: true });
+        const slotToRemove = selectedSlots[slotIndex];
+        
+        Object.entries(slotToRemove).forEach(([sId, label]) => {
+          if (label) {
+            batch.set(doc(db, 'seats', `${sId}-${label}`), {
+              status: 'available',
+              lockedBy: null,
+              lockedAt: null
+            }, { merge: true });
+          }
         });
+        
         await batch.commit();
-        setSelectedSeats(prev => prev.filter(label => label !== seatLabel));
+        setSelectedSlots(prev => prev.filter((_, i) => i !== slotIndex));
       } catch (error) {
         toast.error("Gagal melepas kursi");
       }
     } else {
-      if (selectedSeats.length >= 2) {
-        toast.error("Maksimal 2 kursi per transaksi");
-        return;
-      }
-
-      const isAnyLockedByOther = relevantSeats.some(s => s?.status === 'locked' && s.lockedBy !== user?.uid);
-      if (isAnyLockedByOther) {
-        toast.error("Kursi sedang dipilih orang lain di salah satu sesi");
-        return;
-      }
-
-      // Lock seat in all sessions
-      try {
-        const batch = writeBatch(db);
-        ticket.sessions.forEach(sessionId => {
-          const seatId = `${sessionId}-${seatLabel}`;
-          // Get existing seat data to preserve isVIP if it exists
-          const existingSeat = seats.find(s => s.id === seatId);
-          
-          batch.set(doc(db, 'seats', seatId), {
-            id: seatId,
-            row: seatLabel.charAt(0),
-            number: parseInt(seatLabel.slice(1)),
+      // SELECT logic
+      
+      // 1. Try to fill a null spot in an existing slot for the ACTIVE session
+      const existingSlotIndexWithNull = selectedSlots.findIndex(slot => slot[activeSession] === null);
+      
+      if (existingSlotIndexWithNull !== -1) {
+        try {
+          const batch = writeBatch(db);
+          batch.set(doc(db, 'seats', seatIdInActiveSession), {
+            id: seatIdInActiveSession,
+            row: rowLabel,
+            number: seatNumber,
             status: 'locked',
             lockedBy: user?.uid,
             lockedAt: serverTimestamp(),
-            session: sessionId,
-            isVIP: existingSeat?.isVIP || (seatLabel.startsWith('E')) // Fallback for Row E
+            session: activeSession,
+            isVIP: seatInActiveSession?.isVIP || (rowLabel === 'E')
           }, { merge: true });
-        });
-        await batch.commit();
-        setSelectedSeats(prev => [...prev, seatLabel]);
-      } catch (error) {
-        toast.error("Gagal memilih kursi");
+          
+          await batch.commit();
+          
+          setSelectedSlots(prev => {
+            const next = [...prev];
+            next[existingSlotIndexWithNull] = { ...next[existingSlotIndexWithNull], [activeSession]: seatLabel };
+            return next;
+          });
+        } catch (error) {
+          toast.error("Gagal memilih kursi");
+        }
+      } else {
+        // 2. Create a NEW slot
+        if (selectedSlots.length >= maxSeats) {
+          toast.error(`Maksimal ${maxSeats} kursi per transaksi`);
+          return;
+        }
+
+        try {
+          const batch = writeBatch(db);
+          const newSlot: Record<string, string | null> = {};
+          
+          // Current active session definitely gets seatLabel
+          newSlot[activeSession] = seatLabel;
+          batch.set(doc(db, 'seats', seatIdInActiveSession), {
+            id: seatIdInActiveSession,
+            row: rowLabel,
+            number: seatNumber,
+            status: 'locked',
+            lockedBy: user?.uid,
+            lockedAt: serverTimestamp(),
+            session: activeSession,
+            isVIP: seatInActiveSession?.isVIP || (rowLabel === 'E')
+          }, { merge: true });
+
+          // Try to sync with other sessions of this ticket
+          ticket.sessions.forEach(sId => {
+            if (sId !== activeSession) {
+              const otherSeatId = `${sId}-${seatLabel}`;
+              const otherSeat = seats.find(s => s.id === otherSeatId);
+              
+              // If it doesn't exist yet OR it's available, we can lock it
+              if (!otherSeat || otherSeat.status === 'available') {
+                newSlot[sId] = seatLabel;
+                batch.set(doc(db, 'seats', otherSeatId), {
+                  id: otherSeatId,
+                  row: rowLabel,
+                  number: seatNumber,
+                  status: 'locked',
+                  lockedBy: user?.uid,
+                  lockedAt: serverTimestamp(),
+                  session: sId,
+                  isVIP: (otherSeat?.isVIP) || (rowLabel === 'E')
+                }, { merge: true });
+              } else {
+                newSlot[sId] = null; // Must be picked manually
+              }
+            }
+          });
+
+          await batch.commit();
+          setSelectedSlots(prev => [...prev, newSlot]);
+          
+          if (Object.values(newSlot).some(v => v === null)) {
+            toast.info("Kursi yang sama tidak tersedia di sesi lain, mohon pilih manual di sesi tersebut.");
+          }
+        } catch (error) {
+          toast.error("Gagal memilih kursi");
+        }
       }
     }
   };
 
   const handleCheckout = async () => {
-    const isTerusan = ticket?.name.toLowerCase().includes('terusan');
-    
+    // Check if any slot is incomplete
+    const isAnySlotIncomplete = selectedSlots.some(slot => 
+      ticket.sessions.some(sId => slot[sId] === null)
+    );
+
+    if (isAnySlotIncomplete) {
+      toast.error("Mohon lengkapi pemilihan kursi untuk semua sesi");
+      return;
+    }
+
     if (!formData.parentName || !formData.studentName || !formData.studentClass || !formData.email) {
       toast.error("Mohon lengkapi semua data diri (Nama, Kelas, dan Email)");
+      return;
+    }
+
+    if (selectedSlots.length >= 2 && (!formData.studentName2 || !formData.studentClass2)) {
+      toast.error("Mohon lengkapi data Ananda ke-2");
+      return;
+    }
+
+    if (selectedSlots.length >= 3 && (!formData.studentName3 || !formData.studentClass3)) {
+      toast.error("Mohon lengkapi data Ananda ke-3");
       return;
     }
 
@@ -209,24 +298,48 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
       return;
     }
 
-    // Check for double booking
-    const student1Exists = existingOrders.some(order => 
-      (order.studentName === formData.studentName && order.studentClass === formData.studentClass) ||
-      (order.studentName2 === formData.studentName && order.studentClass2 === formData.studentClass)
-    );
+    // Check for duplicate booking (considering session overlap)
+    const checkDoubleBooking = (name: string, studentClass: string) => {
+      return existingOrders.some(order => {
+        const isSameStudent = (order.studentName === name && order.studentClass === studentClass) ||
+                             (order.studentName2 === name && order.studentClass2 === studentClass) ||
+                             (order.studentName3 === name && order.studentClass3 === studentClass);
+        if (!isSameStudent) return false;
+        
+        return order.sessions.some(s => ticket.sessions.includes(s));
+      });
+    };
 
-    if (student1Exists) {
-      toast.error(`Siswa "${formData.studentName}" sudah memiliki pesanan aktif di sistem.`);
+    if (checkDoubleBooking(formData.studentName, formData.studentClass)) {
+      toast.error(`Ananda 1 (${formData.studentName}) sudah memiliki pesanan aktif untuk sesi yang sama.`);
       return;
     }
 
-    if (isTerusan && formData.studentName2) {
-      const student2Exists = existingOrders.some(order => 
-        (order.studentName === formData.studentName2 && order.studentClass === formData.studentClass2) ||
-        (order.studentName2 === formData.studentName2 && order.studentClass2 === formData.studentClass2)
-      );
-      if (student2Exists) {
-        toast.error(`Siswa "${formData.studentName2}" sudah memiliki pesanan aktif di sistem.`);
+    if (formData.studentName2) {
+      if (checkDoubleBooking(formData.studentName2, formData.studentClass2)) {
+        toast.error(`Ananda 2 (${formData.studentName2}) sudah memiliki pesanan aktif untuk sesi yang sama.`);
+        return;
+      }
+      
+      if (formData.studentName === formData.studentName2 && formData.studentClass === formData.studentClass2) {
+        toast.error("Nama Ananda 1 dan Ananda 2 tidak boleh sama");
+        return;
+      }
+    }
+
+    if (formData.studentName3) {
+      if (checkDoubleBooking(formData.studentName3, formData.studentClass3)) {
+        toast.error(`Ananda 3 (${formData.studentName3}) sudah memiliki pesanan aktif untuk sesi yang sama.`);
+        return;
+      }
+
+      if (formData.studentName === formData.studentName3 && formData.studentClass === formData.studentClass3) {
+        toast.error("Nama Ananda 1 dan Ananda 3 tidak boleh sama");
+        return;
+      }
+
+      if (formData.studentName2 === formData.studentName3 && formData.studentClass2 === formData.studentClass3) {
+        toast.error("Nama Ananda 2 dan Ananda 3 tidak boleh sama");
         return;
       }
     }
@@ -238,6 +351,17 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
       const batch = writeBatch(db);
       const orderRef = doc(collection(db, 'orders'));
       
+      // Flatten all selected seats into a single strings list for orderData.seats (using Firestore IDs)
+      const allSeatsList: string[] = [];
+      selectedSlots.forEach((slot) => {
+        ticket.sessions.forEach(sId => {
+          const label = slot[sId];
+          if (label) {
+            allSeatsList.push(`${sId}-${label}`);
+          }
+        });
+      });
+
       const orderData: any = {
         userId: user?.uid || '',
         parentName: formData.parentName,
@@ -246,8 +370,8 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
         email: formData.email,
         ticketType: ticket.name,
         sessions: ticket.sessions,
-        seats: selectedSeats,
-        totalAmount: ticket.price * selectedSeats.length,
+        seats: allSeatsList,
+        totalAmount: ticket.price * selectedSlots.length,
         status: 'pending',
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
@@ -255,25 +379,28 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
 
       if (formData.studentName2) orderData.studentName2 = formData.studentName2;
       if (formData.studentClass2) orderData.studentClass2 = formData.studentClass2;
+      if (formData.studentName3) orderData.studentName3 = formData.studentName3;
+      if (formData.studentClass3) orderData.studentClass3 = formData.studentClass3;
 
       batch.set(orderRef, orderData);
 
       // Mark seats as sold in all sessions
-      selectedSeats.forEach(seatLabel => {
-        ticket.sessions.forEach(sessionId => {
-          const seatId = `${sessionId}-${seatLabel}`;
-          batch.set(doc(db, 'seats', seatId), {
-            status: 'sold',
-            orderId: orderRef.id,
-            lockedBy: null,
-            lockedAt: null
-          }, { merge: true });
+      selectedSlots.forEach(slot => {
+        Object.entries(slot).forEach(([sId, label]) => {
+          if (label) {
+            const seatId = `${sId}-${label}`;
+            batch.set(doc(db, 'seats', seatId), {
+              status: 'sold',
+              orderId: orderRef.id,
+              lockedBy: null,
+              lockedAt: null
+            }, { merge: true });
+          }
         });
       });
 
       await batch.commit();
       
-      // Send E-Ticket Email (Client-side via Apps Script)
       try {
         await sendTicketEmail({
           email: formData.email,
@@ -282,14 +409,16 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
           studentClass: formData.studentClass,
           studentName2: formData.studentName2,
           studentClass2: formData.studentClass2,
+          studentName3: formData.studentName3,
+          studentClass3: formData.studentClass3,
           orderId: orderRef.id,
           ticketName: ticket.name,
-          seats: selectedSeats,
+          seats: allSeatsList,
           sessions: ticket.sessions.map(sId => {
             const session = SESSIONS.find(s => s.id === sId);
             return session ? `${session.name} (${session.time})` : sId;
           }),
-          totalAmount: ticket.price * selectedSeats.length,
+          totalAmount: ticket.price * selectedSlots.length,
           status: 'pending'
         });
       } catch (emailError: any) {
@@ -342,7 +471,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div>
                 <CardTitle className="text-2xl font-bold text-lazuardi">Pilih Kursi Anda</CardTitle>
-                <CardDescription>Klik pada kursi yang tersedia untuk memilih (Maks. 2)</CardDescription>
+                <CardDescription>Klik pada kursi yang tersedia untuk memilih (Maks. {maxSeats})</CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
                 {ticket.sessions.length > 1 && ticket.sessions.map(s => (
@@ -407,9 +536,19 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                   for (let i = end; i >= start; i--) {
                     const seat = rowSeats.find(s => s.number === i);
                     const seatLabel = `${rowLabel}${i}`;
-                    const isSelected = selectedSeats.includes(seatLabel);
-                    const isSold = seat?.status === 'sold';
-                    const isLocked = seat?.status === 'locked' && seat.lockedBy !== user?.uid;
+
+                    // Check availability across all sessions for this specific ticket
+                    const isTakenInAny = ticket.sessions.some(sId => {
+                      const s = seats.find(st => st.id === `${sId}-${seatLabel}` || st.id === seatLabel);
+                      return s && (s.status === 'sold' || (s.status === 'locked' && s.lockedBy !== user?.uid));
+                    });
+
+                    const isSelected = selectedSeatsForActiveSession.includes(seatLabel);
+                    const isSold = isTakenInAny && ticket.sessions.some(sId => {
+                      const s = seats.find(st => st.id === `${sId}-${seatLabel}` || st.id === seatLabel);
+                      return s?.status === 'sold';
+                    });
+                    const isLocked = isTakenInAny && !isSold && !isSelected;
                     // Use rowInfo.isVIP as the source of truth for the entire row
                     // Exception: Row F numbers 1-7 and 21-27 are unblocked
                     const isVIP = rowInfo.isVIP && !(rowLabel === 'F' && ((i >= 1 && i <= 7) || (i >= 21 && i <= 27)));
@@ -513,11 +652,18 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
 
               <div className="space-y-2">
                 <span className="text-[10px] uppercase font-black tracking-widest text-stone-400">Kursi Terpilih</span>
-                <div className="flex flex-wrap gap-2 min-h-[40px]">
-                  {selectedSeats.length > 0 ? selectedSeats.map((label, idx) => (
-                    <Badge key={`${label}-${idx}`} className="bg-lazuardi text-white border-none px-4 py-1.5 text-sm font-bold rounded-xl shadow-md shadow-lazuardi/20">
-                      {label}
-                    </Badge>
+                <div className="flex flex-col gap-2 min-h-[40px]">
+                  {selectedSlots.length > 0 ? selectedSlots.map((slot, idx) => (
+                    <div key={`slot-summary-${idx}`} className="space-y-1">
+                      <p className="text-[10px] font-bold text-stone-500">Ananda {idx + 1}:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(slot).map(([sId, label]) => (
+                          <Badge key={`${sId}-${label}-${idx}`} className="bg-lazuardi text-white border-none px-3 py-1 text-xs font-bold rounded-lg shadow-sm">
+                            {label || '?'} ({sId})
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
                   )) : (
                     <p className="text-stone-400 text-sm italic">Belum ada kursi dipilih</p>
                   )}
@@ -528,7 +674,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 <div className="flex justify-between items-end">
                   <span className="text-[10px] uppercase font-black tracking-widest text-stone-400">Total Pembayaran</span>
                   <div className="text-right">
-                    <p className="text-3xl font-black tracking-tighter text-lazuardi">Rp {(ticket.price * selectedSeats.length).toLocaleString('id-ID')}</p>
+                    <p className="text-3xl font-black tracking-tighter text-lazuardi">Rp {(ticket.price * selectedSlots.length).toLocaleString('id-ID')}</p>
                     <p className="text-[10px] text-stone-400 font-bold">Termasuk pajak & biaya layanan</p>
                   </div>
                 </div>
@@ -536,7 +682,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
             </CardContent>
             <CardFooter className="pb-8 px-6">
               <Button 
-                disabled={selectedSeats.length === 0} 
+                disabled={selectedSlots.length === 0} 
                 className="w-full bg-lazuardi hover:bg-lazuardi-dark text-white rounded-2xl py-8 text-lg font-bold shadow-2xl shadow-lazuardi/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
                 onClick={() => setIsCheckoutOpen(true)}
               >
@@ -613,7 +759,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 )}
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="studentName">{ticket.isPublic ? 'Keterangan Siswa' : (ticket?.name.toLowerCase().includes('terusan') ? 'Nama Ananda 1' : 'Nama Lengkap Ananda')} <span className="text-red-500">*</span></Label>
+                <Label htmlFor="studentName">{ticket.isPublic ? 'Keterangan Siswa' : (selectedSlots.length >= 2 || isTerusan ? 'Nama Ananda 1' : 'Nama Lengkap Ananda')} <span className="text-red-500">*</span></Label>
                 {ticket.isPublic ? (
                   <Input 
                     id="studentName"
@@ -635,11 +781,20 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                     <option value="">{formData.studentClass ? 'Pilih Nama Siswa' : 'Pilih Kelas Terlebih Dahulu'}</option>
                     {formData.studentClass && STUDENTS_BY_CLASS[formData.studentClass]
                       ?.filter(name => {
-                        // Hide if already in an active order
-                        return !existingOrders.some(order => 
-                          (order.studentName === name && order.studentClass === formData.studentClass) ||
-                          (order.studentName2 === name && order.studentClass2 === formData.studentClass)
-                        );
+                        // 1. Hide if selected as studentName2 or studentName3 in the same form
+                        if (name === formData.studentName2 && formData.studentClass === formData.studentClass2) return false;
+                        if (name === formData.studentName3 && formData.studentClass === formData.studentClass3) return false;
+
+                        // 2. Hide if already has a ticket with overlapping sessions
+                        return !existingOrders.some(order => {
+                          const isSameStudent = (order.studentName === name && order.studentClass === formData.studentClass) ||
+                                              (order.studentName2 === name && order.studentClass2 === formData.studentClass) ||
+                                              (order.studentName3 === name && order.studentClass3 === formData.studentClass);
+                          if (!isSameStudent) return false;
+                          
+                          // Check session overlap
+                          return order.sessions.some(s => ticket.sessions.includes(s));
+                        });
                       })
                       .map(name => (
                         <option key={name} value={name}>{name}</option>
@@ -648,7 +803,7 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                 )}
               </div>
 
-              {ticket?.name.toLowerCase().includes('terusan') && (
+              {(selectedSlots.length >= 2 || isTerusan) && (
                 <>
                   <div className="grid gap-2 pt-2 border-t border-stone-100">
                     <Label htmlFor="studentClass2">Kelas Ananda 2 <span className="text-red-500">*</span></Label>
@@ -699,11 +854,20 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                         <option value="">{formData.studentClass2 ? 'Pilih Nama Siswa' : 'Pilih Kelas Terlebih Dahulu'}</option>
                         {formData.studentClass2 && STUDENTS_BY_CLASS[formData.studentClass2]
                           ?.filter(name => {
-                            // Hide if already in an active order
-                            return !existingOrders.some(order => 
-                              (order.studentName === name && order.studentClass === formData.studentClass2) ||
-                              (order.studentName2 === name && order.studentClass2 === formData.studentClass2)
-                            );
+                            // 1. Hide if selected as studentName or studentName3 in the same form
+                            if (name === formData.studentName && formData.studentClass2 === formData.studentClass) return false;
+                            if (name === formData.studentName3 && formData.studentClass2 === formData.studentClass3) return false;
+
+                            // 2. Hide if already has a ticket with overlapping sessions
+                            return !existingOrders.some(order => {
+                              const isSameStudent = (order.studentName === name && order.studentClass === formData.studentClass2) ||
+                                                  (order.studentName2 === name && order.studentClass2 === formData.studentClass2) ||
+                                                  (order.studentName3 === name && order.studentClass3 === formData.studentClass2);
+                              if (!isSameStudent) return false;
+                              
+                              // Check session overlap
+                              return order.sessions.some(s => ticket.sessions.includes(s));
+                            });
                           })
                           .map(name => (
                             <option key={name} value={name}>{name}</option>
@@ -713,6 +877,82 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                   </div>
                 </>
               )}
+
+              {selectedSlots.length >= 3 && (
+                <>
+                  <div className="grid gap-2 pt-2 border-t border-stone-100">
+                    <Label htmlFor="studentClass3">Kelas Ananda 3 <span className="text-red-500">*</span></Label>
+                    {ticket.isPublic ? (
+                      <Input 
+                        id="studentClass3"
+                        required
+                        value={formData.studentClass3}
+                        onChange={e => setFormData(prev => ({ ...prev, studentClass3: e.target.value }))}
+                        placeholder="Contoh: Umum / Alumni"
+                        className="rounded-xl"
+                      />
+                    ) : (
+                      <select
+                        id="studentClass3"
+                        required
+                        value={formData.studentClass3}
+                        onChange={e => setFormData(prev => ({ ...prev, studentClass3: e.target.value, studentName3: '' }))}
+                        className="flex h-10 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm ring-offset-white file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-stone-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lazuardi focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <option value="">Pilih Kelas</option>
+                        {STUDENT_CLASSES.map(cls => (
+                          <option key={cls} value={cls}>{cls}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="studentName3">Nama Ananda 3 <span className="text-red-500">*</span></Label>
+                    {ticket.isPublic ? (
+                      <Input 
+                        id="studentName3"
+                        required
+                        value={formData.studentName3}
+                        onChange={e => setFormData(prev => ({ ...prev, studentName3: e.target.value }))}
+                        placeholder="Contoh: Nama Siswa & Kelas"
+                        className="rounded-xl"
+                      />
+                    ) : (
+                      <select
+                        id="studentName3"
+                        required
+                        disabled={!formData.studentClass3}
+                        value={formData.studentName3}
+                        onChange={e => setFormData(prev => ({ ...prev, studentName3: e.target.value }))}
+                        className="flex h-10 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm ring-offset-white file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-stone-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lazuardi focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <option value="">{formData.studentClass3 ? 'Pilih Nama Siswa' : 'Pilih Kelas Terlebih Dahulu'}</option>
+                        {formData.studentClass3 && STUDENTS_BY_CLASS[formData.studentClass3]
+                          ?.filter(name => {
+                            // 1. Hide if selected as studentName or studentName2 in the same form
+                            if (name === formData.studentName && formData.studentClass3 === formData.studentClass) return false;
+                            if (name === formData.studentName2 && formData.studentClass3 === formData.studentClass2) return false;
+
+                            // 2. Hide if already has a ticket with overlapping sessions
+                            return !existingOrders.some(order => {
+                              const isSameStudent = (order.studentName === name && order.studentClass === formData.studentClass3) ||
+                                                  (order.studentName2 === name && order.studentClass2 === formData.studentClass3) ||
+                                                  (order.studentName3 === name && order.studentClass3 === formData.studentClass3);
+                              if (!isSameStudent) return false;
+                              
+                              // Check session overlap
+                              return order.sessions.some(s => ticket.sessions.includes(s));
+                            });
+                          })
+                          .map(name => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                      </select>
+                    )}
+                  </div>
+                </>
+              )}
+
               <div className="grid gap-2">
                 <Label htmlFor="email">Email <span className="text-red-500">*</span></Label>
                 <Input 
@@ -745,6 +985,12 @@ export default function BookingView({ tickets = TICKET_TYPES }: { tickets?: Tick
                         <>
                           <br />
                           • {formData.studentName2} ({formData.studentClass2})
+                        </>
+                      )}
+                      {formData.studentName3 && (
+                        <>
+                          <br />
+                          • {formData.studentName3} ({formData.studentClass3})
                         </>
                       )}
                     </div>
