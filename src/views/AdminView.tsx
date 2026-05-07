@@ -118,7 +118,7 @@ export default function AdminView() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'paid' | 'pending' | 'cancelled'>('all');
-  const [activeTab, setActiveTab] = useState<'orders' | 'checkin' | 'settings' | 'scholarship'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'checkin' | 'settings' | 'scholarship' | 'free-ticket'>('orders');
   const [scannedOrderId, setScannedOrderId] = useState<string | null>(null);
   const [manualOrderId, setManualOrderId] = useState('');
   const [isScannerStarted, setIsScannerStarted] = useState(false);
@@ -825,7 +825,15 @@ export default function AdminView() {
             onClick={() => setActiveTab('scholarship')}
           >
             <Armchair className="w-4 h-4 mr-2" />
-            Alokasi Beasiswa
+            Beasiswa
+          </Button>
+          <Button 
+            variant={activeTab === 'free-ticket' ? 'default' : 'outline'}
+            className={`rounded-full font-bold px-6 ${activeTab === 'free-ticket' ? 'bg-lazuardi' : 'border-stone-200 text-stone-600'}`}
+            onClick={() => setActiveTab('free-ticket')}
+          >
+            <Ticket className="w-4 h-4 mr-2" />
+            Free Ticket
           </Button>
           <Button 
             variant={activeTab === 'settings' ? 'default' : 'outline'}
@@ -1466,7 +1474,9 @@ export default function AdminView() {
           </div>
         </>
       ) : activeTab === 'scholarship' ? (
-        <ScholarshipAllocationTab seats={seats} orders={orders} />
+        <AllocationTab type="scholarship" seats={seats} orders={orders} />
+      ) : activeTab === 'free-ticket' ? (
+        <AllocationTab type="free" seats={seats} orders={orders} />
       ) : activeTab === 'settings' ? (
         <TicketSettingsTab configs={ticketConfigs} />
       ) : null}
@@ -1687,13 +1697,28 @@ function TicketSettingsTab({ configs }: { configs: TicketConfig[] }) {
   );
 }
 
-function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Order[] }) {
+function AllocationTab({ type, seats, orders }: { type: 'scholarship' | 'free', seats: Seat[], orders: Order[] }) {
   const [selectedSession, setSelectedSession] = useState(SESSIONS[0].id);
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
   const [studentClass, setStudentClass] = useState('');
   const [studentName, setStudentName] = useState('');
   const [recipientEmail, setRecipientEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const config = {
+    scholarship: {
+      title: "Alokasi Beasiswa",
+      parentName: "Beasiswa SD Lazuardi",
+      ticketType: "Alokasi Beasiswa",
+      limit: 10
+    },
+    free: {
+      title: "Alokasi Free Ticket",
+      parentName: "Free Ticket Lazuardi",
+      ticketType: "Free Ticket",
+      limit: 20
+    }
+  }[type];
 
   const handleSeatClick = (seatLabel: string) => {
     const seatId = `${selectedSession}-${seatLabel}`;
@@ -1707,8 +1732,8 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
     if (selectedSeats.includes(seatLabel)) {
       setSelectedSeats(prev => prev.filter(s => s !== seatLabel));
     } else {
-      if (selectedSeats.length >= 10) {
-        toast.error("Maksimal 10 kursi per alokasi beasiswa");
+      if (selectedSeats.length >= config.limit) {
+        toast.error(`Maksimal ${config.limit} kursi per alokasi`);
         return;
       }
       setSelectedSeats(prev => [...prev, seatLabel]);
@@ -1737,12 +1762,12 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
       const allSeatsList = selectedSeats.map(label => `${selectedSession}-${label}`);
 
       batch.set(orderRef, {
-        userId: 'SYSTEM_SCHOLARSHIP',
-        parentName: 'Beasiswa SD Lazuardi',
+        userId: type === 'scholarship' ? 'SYSTEM_SCHOLARSHIP' : 'SYSTEM_FREE',
+        parentName: config.parentName,
         studentName,
         studentClass,
         email: recipientEmail,
-        ticketType: 'Alokasi Beasiswa',
+        ticketType: config.ticketType,
         sessions: [selectedSession],
         seats: allSeatsList,
         totalAmount: 0,
@@ -1768,23 +1793,23 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
         try {
           await sendTicketEmail({
             email: recipientEmail,
-            parentName: 'Beasiswa SD Lazuardi',
+            parentName: config.parentName,
             studentName: studentName,
             studentClass: studentClass,
             orderId: orderRef.id,
-            ticketName: 'Alokasi Beasiswa',
+            ticketName: config.ticketType,
             seats: allSeatsList,
             sessions: [session ? `${session.name} (${session.time})` : selectedSession],
             totalAmount: 0,
             status: 'paid'
           });
-          toast.success("Alokasi beasiswa berhasil disimpan dan E-Ticket telah dikirim!");
+          toast.success("Alokasi berhasil disimpan dan E-Ticket telah dikirim!");
         } catch (emailError: any) {
           console.error("Email Error:", emailError);
           toast.warning(`Alokasi disimpan, tapi gagal kirim email: ${emailError.message}`);
         }
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, 'scholarship allocation batch');
+        handleFirestoreError(err, OperationType.WRITE, 'allocation batch');
       }
       
       setSelectedSeats([]);
@@ -1803,19 +1828,19 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Card className="lg:col-span-2 border-stone-200 shadow-xl rounded-[2.5rem] overflow-hidden bg-white">
           <CardHeader className="bg-stone-50/50 border-b border-stone-100 p-8">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center overflow-x-auto gap-4 custom-scrollbar">
               <div>
-                <CardTitle className="text-xl font-bold text-lazuardi">Pilih Kursi Beasiswa</CardTitle>
-                <CardDescription>Pilih kursi untuk sesi {SESSIONS.find(s => s.id === selectedSession)?.name}</CardDescription>
+                <CardTitle className="text-xl font-bold text-lazuardi whitespace-nowrap">{config.title}</CardTitle>
+                <CardDescription className="whitespace-nowrap">Pilih kursi untuk sesi {SESSIONS.find(s => s.id === selectedSession)?.name}</CardDescription>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 pb-1">
                 {SESSIONS.map(s => (
                   <Button 
                     key={s.id}
                     size="sm"
                     variant={selectedSession === s.id ? 'default' : 'outline'}
                     onClick={() => { setSelectedSession(s.id); setSelectedSeats([]); }}
-                    className="rounded-full"
+                    className="rounded-full whitespace-nowrap"
                   >
                     {s.name}
                   </Button>
@@ -1823,55 +1848,60 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
               </div>
             </div>
           </CardHeader>
-          <CardContent className="p-8">
-            <div className="space-y-1 overflow-x-auto pb-12 custom-scrollbar">
-              {SEATING_LAYOUT.map((rowInfo) => {
-                const rowLabel = rowInfo.row;
-                const renderSection = (range: number[]) => {
-                  const seatsInRow = [];
-                  for (let i = range[1]; i >= range[0]; i--) {
-                    const seatLabel = `${rowLabel}${i}`;
-                    const seatId = `${selectedSession}-${seatLabel}`;
-                    const seat = seats.find(s => s.id === seatId);
-                    const isSelected = selectedSeats.includes(seatLabel);
-                    const isSold = seat?.status === 'sold';
-                    
-                    seatsInRow.push(
-                      <div
-                        key={`alloc-${selectedSession}-${rowLabel}-${i}`}
-                        onClick={() => !isSold && handleSeatClick(seatLabel)}
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black cursor-pointer transition-all
-                          ${isSelected ? 'bg-green-600 text-white scale-110 shadow-lg' : 
-                            isSold ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 
-                            'bg-white border border-stone-200 text-stone-600 hover:border-lazuardi'}
-                        `}
-                      >
-                        {i}
+          <CardContent className="p-0 overflow-hidden">
+            <div className="overflow-x-auto p-8 custom-scrollbar">
+              <div className="min-w-max flex flex-col items-center">
+                <div className="space-y-1">
+                  {SEATING_LAYOUT.map((rowInfo) => {
+                    const rowLabel = rowInfo.row;
+                    const renderSection = (range: number[]) => {
+                      const seatsInRow = [];
+                      for (let i = range[1]; i >= range[0]; i--) {
+                        const seatLabel = `${rowLabel}${i}`;
+                        const seatId = `${selectedSession}-${seatLabel}`;
+                        const seat = seats.find(s => s.id === seatId);
+                        const isSelected = selectedSeats.includes(seatLabel);
+                        const isSold = seat?.status === 'sold';
+                        
+                        seatsInRow.push(
+                          <button
+                            type="button"
+                            key={`alloc-${selectedSession}-${rowLabel}-${i}`}
+                            onClick={() => !isSold && handleSeatClick(seatLabel)}
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black cursor-pointer transition-all shrink-0
+                              ${isSelected ? 'bg-green-600 text-white scale-110 shadow-lg' : 
+                                isSold ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 
+                                'bg-white border border-stone-200 text-stone-600 hover:border-lazuardi'}
+                            `}
+                          >
+                            {i}
+                          </button>
+                        );
+                      }
+                      return seatsInRow;
+                    };
+
+                    return (
+                      <div key={rowLabel} className="flex items-center justify-center gap-4 mb-1">
+                        <div className="w-6 text-[10px] font-bold text-stone-300 text-right shrink-0">{rowLabel}</div>
+                        <div className="flex gap-1 shrink-0">{renderSection(rowInfo.left)}</div>
+                        <div className="w-4 shrink-0"></div>
+                        <div className="flex gap-1 shrink-0">{renderSection(rowInfo.center)}</div>
+                        <div className="w-4 shrink-0"></div>
+                        <div className="flex gap-1 shrink-0">{renderSection(rowInfo.right)}</div>
+                        <div className="w-6 text-[10px] font-bold text-stone-300 text-left shrink-0">{rowLabel}</div>
                       </div>
                     );
-                  }
-                  return seatsInRow;
-                };
-
-                return (
-                  <div key={rowLabel} className="flex items-center justify-center gap-4 mb-1">
-                    <div className="w-6 text-[10px] font-bold text-stone-300">{rowLabel}</div>
-                    <div className="flex gap-1">{renderSection(rowInfo.left)}</div>
-                    <div className="w-4"></div>
-                    <div className="flex gap-1">{renderSection(rowInfo.center)}</div>
-                    <div className="w-4"></div>
-                    <div className="flex gap-1">{renderSection(rowInfo.right)}</div>
-                    <div className="w-6 text-[10px] font-bold text-stone-300">{rowLabel}</div>
-                  </div>
-                );
-              })}
+                  })}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
 
         <Card className="border-stone-200 shadow-xl rounded-[2.5rem] bg-stone-50 overflow-hidden h-fit">
           <CardHeader className="p-8 pb-4">
-            <CardTitle className="text-xl font-bold text-stone-800">Data Penerima</CardTitle>
+            <CardTitle className="text-xl font-bold text-stone-800">Data Penerima ({type})</CardTitle>
           </CardHeader>
           <CardContent className="p-8 space-y-6">
             <div className="space-y-4">
