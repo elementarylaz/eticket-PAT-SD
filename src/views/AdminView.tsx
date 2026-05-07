@@ -343,8 +343,8 @@ export default function AdminView() {
 
         try {
           await batch.commit();
-        } catch (error) {
-          console.error("Cleanup error:", error);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, 'cleanup interval batch');
         }
       }
     }, 60000); // Check every minute
@@ -523,7 +523,11 @@ export default function AdminView() {
             lockedAt: null
           }, { merge: true });
         });
-        await batch.commit();
+        try {
+          await batch.commit();
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, 'reset seats batch');
+        }
       }
       toast.success("Semua kursi telah di-reset", { id: toastId });
     } catch (error) {
@@ -545,7 +549,11 @@ export default function AdminView() {
         chunk.forEach(order => {
           batch.delete(doc(db, 'orders', order.id!));
         });
-        await batch.commit();
+        try {
+          await batch.commit();
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, 'reset orders batch');
+        }
       }
       toast.success("Semua pesanan telah dihapus", { id: toastId });
     } catch (error) {
@@ -588,7 +596,11 @@ export default function AdminView() {
           // 2. Delete order
           batch.delete(doc(db, 'orders', order.id!));
 
-          await batch.commit();
+          try {
+            await batch.commit();
+          } catch (err) {
+            handleFirestoreError(err, OperationType.WRITE, 'delete order batch');
+          }
           toast.success("Pesanan berhasil dihapus", { id: toastId });
         } catch (error) {
           console.error(error);
@@ -630,7 +642,11 @@ export default function AdminView() {
             }
           });
 
-          await batch.commit();
+          try {
+            await batch.commit();
+          } catch (err) {
+            handleFirestoreError(err, OperationType.WRITE, 'cancel order batch');
+          }
           toast.success("Pesanan dibatalkan");
         } catch (error) {
           toast.error("Gagal membatalkan pesanan");
@@ -667,7 +683,11 @@ export default function AdminView() {
                   orderId: null
                 });
               });
-              await batch.commit();
+              try {
+                await batch.commit();
+              } catch (err) {
+                handleFirestoreError(err, OperationType.WRITE, 'clear seats chunk batch');
+              }
             }
           }
 
@@ -683,7 +703,11 @@ export default function AdminView() {
               chunk.forEach(order => {
                 batch.delete(doc(db, 'orders', order.id!));
               });
-              await batch.commit();
+              try {
+                await batch.commit();
+              } catch (err) {
+                handleFirestoreError(err, OperationType.WRITE, 'clear orders chunk batch');
+              }
             }
           }
 
@@ -741,7 +765,11 @@ export default function AdminView() {
             });
 
             if (addedCount > 0) {
-              await batch.commit();
+              try {
+                await batch.commit();
+              } catch (err) {
+                handleFirestoreError(err, OperationType.WRITE, 'initialize seats batch');
+              }
               console.log(`Added ${addedCount} seats for ${session.id}`);
             }
           }
@@ -1664,6 +1692,7 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
   const [studentClass, setStudentClass] = useState('');
   const [studentName, setStudentName] = useState('');
+  const [recipientEmail, setRecipientEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSeatClick = (seatLabel: string) => {
@@ -1687,8 +1716,15 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
   };
 
   const handleAllocate = async () => {
-    if (!studentClass || !studentName || selectedSeats.length === 0) {
-      toast.error("Mohon lengkapi data siswa dan pilih minimal 1 kursi");
+    if (!studentClass || !studentName || !recipientEmail || selectedSeats.length === 0) {
+      toast.error("Mohon lengkapi data siswa, email, dan pilih minimal 1 kursi");
+      return;
+    }
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(recipientEmail)) {
+      toast.error("Format email tidak valid");
       return;
     }
 
@@ -1698,16 +1734,17 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
       const orderRef = doc(collection(db, 'orders'));
       
       const session = SESSIONS.find(s => s.id === selectedSession);
+      const allSeatsList = selectedSeats.map(label => `${selectedSession}-${label}`);
 
       batch.set(orderRef, {
         userId: 'SYSTEM_SCHOLARSHIP',
         parentName: 'Beasiswa SD Lazuardi',
         studentName,
         studentClass,
-        email: 'scholarship@lazuardi.sch.id',
+        email: recipientEmail,
         ticketType: 'Alokasi Beasiswa',
         sessions: [selectedSession],
-        seats: selectedSeats.map(label => `${selectedSession}-${label}`),
+        seats: allSeatsList,
         totalAmount: 0,
         status: 'paid',
         createdAt: new Date().toISOString(),
@@ -1724,12 +1761,38 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
         }, { merge: true });
       });
 
-      await batch.commit();
-      toast.success("Alokasi beasiswa berhasil disimpan!");
+      try {
+        await batch.commit();
+        
+        // Send E-Ticket
+        try {
+          await sendTicketEmail({
+            email: recipientEmail,
+            parentName: 'Beasiswa SD Lazuardi',
+            studentName: studentName,
+            studentClass: studentClass,
+            orderId: orderRef.id,
+            ticketName: 'Alokasi Beasiswa',
+            seats: allSeatsList,
+            sessions: [session ? `${session.name} (${session.time})` : selectedSession],
+            totalAmount: 0,
+            status: 'paid'
+          });
+          toast.success("Alokasi beasiswa berhasil disimpan dan E-Ticket telah dikirim!");
+        } catch (emailError: any) {
+          console.error("Email Error:", emailError);
+          toast.warning(`Alokasi disimpan, tapi gagal kirim email: ${emailError.message}`);
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, 'scholarship allocation batch');
+      }
+      
       setSelectedSeats([]);
       setStudentName('');
+      setRecipientEmail('');
     } catch (error) {
-      toast.error("Gagal menyimpan alokasi");
+      console.error("Allocation Error:", error);
+      toast.error(`Gagal menyimpan alokasi: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -1834,6 +1897,16 @@ function ScholarshipAllocationTab({ seats, orders }: { seats: Seat[], orders: Or
                   <option value="">Pilih Nama</option>
                   {studentClass && STUDENTS_BY_CLASS[studentClass]?.map(name => <option key={name} value={name}>{name}</option>)}
                 </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-stone-500 uppercase tracking-widest">Email Penerima</label>
+                <Input 
+                  type="email"
+                  className="w-full h-12 rounded-2xl border border-stone-200 px-4 bg-white"
+                  value={recipientEmail}
+                  onChange={(e) => setRecipientEmail(e.target.value)}
+                  placeholder="penerima@email.com"
+                />
               </div>
               <div className="pt-4 space-y-2">
                 <label className="text-xs font-bold text-stone-500 uppercase tracking-widest">Kursi Terpilih ({selectedSeats.length})</label>
